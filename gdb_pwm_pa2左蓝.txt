@@ -1,0 +1,75 @@
+call rcu_periph_reset_enable(RCU_TIMER1)
+call rcu_periph_reset_disable(RCU_TIMER1)
+call rcu_periph_clock_enable(RCU_TIMER1)
+call rcu_periph_clock_enable(RCU_GPIOA)
+call rcu_periph_clock_enable(RCU_AF)
+set $AFIO_MAPR = (uint32_t*)0x40010004
+set *$AFIO_MAPR &= ~(3 << 8)
+call gpio_init(GPIOA, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_2)
+set $TIMER1_CTL0   = (uint32_t*)(TIMER1 + 0x00)
+set $TIMER1_SWEVG  = (uint32_t*)(TIMER1 + 0x14)
+set $TIMER1_CHCTL1 = (uint32_t*)(TIMER1 + 0x1C)
+set $TIMER1_CHCTL2 = (uint32_t*)(TIMER1 + 0x20)
+set $TIMER1_CNT    = (uint32_t*)(TIMER1 + 0x24)
+set $TIMER1_PSC    = (uint32_t*)(TIMER1 + 0x28)
+set $TIMER1_CAR    = (uint32_t*)(TIMER1 + 0x2C)
+set $TIMER1_CH2CV  = (uint32_t*)(TIMER1 + 0x3C)
+set *$TIMER1_CNT   = 0
+set *$TIMER1_PSC   = 7199
+set *$TIMER1_CAR   = 9999
+set *$TIMER1_CH2CV = 4999
+set *$TIMER1_CHCTL1 = (*$TIMER1_CHCTL1 & ~0xFF) | 0x68
+set *$TIMER1_CHCTL2 &= ~(1 << 9)
+set *$TIMER1_CHCTL2 |= (1 << 8)
+set *$TIMER1_SWEVG = (1 << 0)
+set *$TIMER1_CTL0 |= (1 << 0)
+
+
+# 1. 基础时钟与引脚配置
+call rcu_periph_reset_enable(RCU_TIMER1)
+call rcu_periph_reset_disable(RCU_TIMER1)
+call rcu_periph_clock_enable(RCU_TIMER1)
+call rcu_periph_clock_enable(RCU_GPIOA)
+call rcu_periph_clock_enable(RCU_AF)
+
+set $AFIO_MAPR = (uint32_t*)0x40010004
+set *$AFIO_MAPR &= ~(3 << 8)
+call gpio_init(GPIOA, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_2)
+
+# 2. 重新建立正确的寄存器映射（这次能成功赋值 0x3C 了）
+set $TIMER1_CTL0   = (uint32_t*)(TIMER1 + 0x00)
+set $TIMER1_SWEVG  = (uint32_t*)(TIMER1 + 0x14)
+set $TIMER1_CHCTL1 = (uint32_t*)(TIMER1 + 0x1C)
+	TIMER1_CHCTL1 到底在偷偷干什么？（为什么不能少）
+如果这是一次完全断电冷启动，或者在开启时钟后整片复位 MCU，删除这两行后，TIMER1_CHCTL1 的值会彻底归零（0x00）。
+
+我们来看看 0x00 和 0x68 会给硬件带来什么完全不同的指令：
+
+当值为默认的 0x00 时（删除这两行后的冷启动状态）
+通道 2 的输出模式位（Bits [6:4]）为 000：这在 GD32/STM32 手册里被称为 Timing / Frozen（输出比较冻结模式）。
+
+硬件行为：硬件会认为“虽然你在计数，虽然你设置了比较值 4999，但无论计数器（CNT）怎么变，都不要去改变引脚的电平”。PA2 引脚会死死卡在初始电平上，绝对不会产生任何波形。
+
+当值为你写入的 0x68 时（二进制 0110 1000）
+这行代码对低 8 位（控制通道 2）进行了精准的手术：
+
+Bits [6:4] = 110（即 0x60）：强行切换为 PWM 模式 1。这是告诉硬件：“当计数器 CNT 小于比较器 CH2CV 时，引脚输出高电平；大于等于时，输出低电平。”
+Bit [3] = 1（即 0x08）：开启输出比较预装载使能（Preload Enable）。这是告诉硬件：“以后我在运行中改变占空比时，先别急着生效，等这一个周期数完了、发生更新事件（Shadow Register 锁存）时，再安全地切到新占空比，防止产生电平毛刺。”
+set $TIMER1_CHCTL2 = (uint32_t*)(TIMER1 + 0x20)
+set $TIMER1_CNT    = (uint32_t*)(TIMER1 + 0x24)
+set $TIMER1_PSC    = (uint32_t*)(TIMER1 + 0x28)
+set $TIMER1_CAR    = (uint32_t*)(TIMER1 + 0x2C)
+set $TIMER1_CH2CV  = (uint32_t*)(TIMER1 + 0x3C)
+
+# 3. 写入参数并启动
+set *$TIMER1_CNT   = 0
+set *$TIMER1_PSC   = 7199
+set *$TIMER1_CAR   = 9999
+set *$TIMER1_CH2CV = 4999
+
+set *$TIMER1_CHCTL1 = (*$TIMER1_CHCTL1 & ~0xFF) | 0x68
+set *$TIMER1_CHCTL2 &= ~(1 << 9)
+set *$TIMER1_CHCTL2 |= (1 << 8)
+
+set *$TIMER1_SWEVG = (1 << 0)
+set *$TIMER1_CTL0 |= (1 << 0)
