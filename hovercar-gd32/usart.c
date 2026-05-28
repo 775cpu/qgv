@@ -28,49 +28,38 @@ static void process_command(const char* command);
 // ============================================
 // 公共函数
 // ============================================
-
-/**
- * @brief 初始化串口
- * @param baudrate 波特率
- */
-void USART_Init(uint32_t baudrate) {
-    /* 1. 先把外设彻底复位（要 deinit 就放在最开头，别放在后面砸场子！） */
-    usart_deinit(DEBUG_USART);
-
-    /* 2. 开启 GPIO 和复用时钟 */
+void USART_Init(uint32_t baudrate)
+{
+    /* 1. 使能 GPIOB、USART2 以及 AFIO 的时钟 */
     rcu_periph_clock_enable(RCU_GPIOB);
-    rcu_periph_clock_enable(RCU_AF);
-    rcu_periph_clock_enable(DEBUG_USART_CLK);
+    rcu_periph_clock_enable(RCU_USART2);
+    rcu_periph_clock_enable(RCU_AF);         // 重映射需要 AFIO 时钟
 
-    /* 3. 配置引脚重映射 */
+    /* 2. 启用 USART2 完全重映射 (TX -> PB10, RX -> PB11) */
     gpio_pin_remap_config(GPIO_USART2_FULL_REMAP, ENABLE);
 
-    /* 4. 初始化 GPIO 管脚模式（让引脚处于完美的待命状态） */
+    /* 3. 配置 TX (PB10) 为复用推挽输出 */
     gpio_init(DEBUG_USART_TX_PORT, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ, DEBUG_USART_TX_PIN);
-    gpio_init(DEBUG_USART_RX_PORT, GPIO_MODE_IPU, GPIO_OSPEED_50MHZ, DEBUG_USART_RX_PIN);
+    /* 4. 配置 RX (PB11) 为浮空输入 */
+    gpio_init(DEBUG_USART_RX_PORT, GPIO_MODE_IN_FLOATING, GPIO_OSPEED_50MHZ, DEBUG_USART_RX_PIN);
 
-    /* 5. 最后配置波特率并使能串口 */
-    usart_baudrate_set(DEBUG_USART, baudrate);
-    usart_receive_config(DEBUG_USART, USART_RECEIVE_ENABLE); // 确保有这行使能接收
-    usart_enable(DEBUG_USART);
+    /* 5. USART2 复位并配置基本参数 */
+    usart_deinit(USART2);
+    usart_baudrate_set(USART2, baudrate);
+    usart_word_length_set(USART2, USART_WL_8BIT);
+    usart_stop_bit_set(USART2, USART_STB_1BIT);
+    usart_parity_config(USART2, USART_PM_NONE);
     
-    usart_baudrate_set(DEBUG_USART, baudrate);
-    usart_word_length_set(DEBUG_USART, USART_WL_8BIT);
-    usart_stop_bit_set(DEBUG_USART, USART_STB_1BIT);
-    usart_parity_config(DEBUG_USART, USART_PM_NONE);
-    usart_hardware_flow_rts_config(DEBUG_USART, USART_RTS_DISABLE);
-    usart_hardware_flow_cts_config(DEBUG_USART, USART_CTS_DISABLE);
-    usart_receive_config(DEBUG_USART, USART_RECEIVE_ENABLE);
-    usart_transmit_config(DEBUG_USART, USART_TRANSMIT_ENABLE);
-    
-    // 使能USART
-    usart_enable(DEBUG_USART);
-    
-    // 使能接收中断
-    nvic_irq_enable(DEBUG_USART_IRQn, 0, 0);
-    usart_interrupt_enable(DEBUG_USART, USART_INT_RBNE);
-    
-    printf("串口初始化完成，波特率: %lu\n", baudrate);
+    /* 6. 关闭硬件流控制 */
+    usart_hardware_flow_rts_config(USART2, USART_RTS_DISABLE);
+    usart_hardware_flow_cts_config(USART2, USART_CTS_DISABLE);
+
+    /* 7. 使能发送和接收 */
+    usart_transmit_config(USART2, USART_TRANSMIT_ENABLE);
+    usart_receive_config(USART2, USART_RECEIVE_ENABLE);
+
+    /* 8. 使能 USART2 */
+    usart_enable(USART2);
 }
 
 /**
