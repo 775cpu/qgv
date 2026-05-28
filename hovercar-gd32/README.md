@@ -94,11 +94,8 @@ make debug
 - 控制参数
 
 ### 遥控器模式
-支持多种遥控器输入模式：
+当前固件仅支持 ADC 模拟输入模式：
 - `REMOTE_MODE_ADC`: ADC模拟输入
-- `REMOTE_MODE_PPM`: PPM信号输入
-- `REMOTE_MODE_PWM`: PWM信号输入
-- `REMOTE_MODE_UART`: 串口遥控器
 
 ### 混控算法
 使用差速转向混控：
@@ -125,7 +122,7 @@ make debug
 
 PA2/PA3 现在用作左侧模拟油门控制输入。
 
-通过 UART3 (PB10/PB11) 可以启用串口遥控输入模式 (`REMOTE_MODE_UART`)。
+UART3 (PB10/PB11) 用于调试输出和命令行交互，当前固件不支持串口遥控输入模式。
 
 支持命令行交互：
 ```

@@ -79,7 +79,7 @@ void BLDC_Init(void) {
     right_motor.speed = 0.0f;
     right_motor.current = 0.0f;
     
-    printf("BLDC驱动初始化完成\n");
+    printf("BLDC driver init complete\n");
 }
 
 /**
@@ -111,7 +111,7 @@ void SetMotorsEnable(FlagStatus enable) {
         right_motor.pwm = 0;
     }
     
-    printf("电机使能: %s\n", enable ? "ON" : "OFF");
+    printf("Motor enable: %s\n", enable ? "ON" : "OFF");
 }
 
 /**

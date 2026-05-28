@@ -6,7 +6,6 @@
 #include "defines.h"
 #include "gd32f10x.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include "firmware_api.h"
 
@@ -14,12 +13,9 @@
 static void init_ppm_input(void);
 static void init_pwm_input(void);
 static void init_adc_input(void);
-static void init_uart_input(void);
 static void update_ppm_input(void);
 static void update_pwm_input(void);
 static void update_adc_input(void);
-static void update_uart_input(void);
-static void process_uart_frame(void);
 static int16_t parse_channel_value(const char* str);
 static int16_t map_adc_to_channel(int16_t adc_value);
 
@@ -42,9 +38,6 @@ static RemoteConfig remote_config = {
     .deadband = 50
 };
 
-static uint8_t uart_rx_buffer[128];
-static uint16_t uart_rx_index = 0;
-
 // ============================================
 // 公共函数
 // ============================================
@@ -59,26 +52,14 @@ void Remote_Init(uint8_t mode) {
     remote_connected = RESET;
     last_remote_update = 0;
     memset(remote_channels, 0, sizeof(remote_channels));
-    uart_rx_index = 0;
 
-    if (mode == REMOTE_MODE_UART) {
-        init_uart_input();
-        last_remote_update = GetSystemTicks();
-        remote_mode = REMOTE_MODE_UART;
-        printf("遥控器初始化完成：UART 串口输入模式\n");
-        return;
+    if (mode != REMOTE_MODE_ADC) {
+        printf("Warning: unsupported remote mode %d, defaulting to ADC hardware mode\n", mode);
     }
 
-    if (mode == REMOTE_MODE_ADC) {
-        init_adc_input();
-        remote_mode = REMOTE_MODE_ADC;
-        printf("遥控器初始化完成：ADC 真实硬件模式\n");
-        return;
-    }
-
-    printf("警告：不支持模式 %d，使用 ADC 硬件模式\n", mode);
     init_adc_input();
     remote_mode = REMOTE_MODE_ADC;
+    printf("Remote init complete: ADC hardware input mode\n");
 }
 
 /**
@@ -93,19 +74,6 @@ void Remote_Update(void) {
         return;
     }
     last_update_time = current_time;
-
-    if (remote_mode == REMOTE_MODE_UART) {
-        update_uart_input();
-
-        // UART 口输入超时检测：只有在已经成功连接后才判定断线
-        if (remote_connected == SET && (current_time - last_remote_update) > REMOTE_TIMEOUT_MS) {
-            remote_connected = RESET;
-            for (int i = 0; i < 8; i++) {
-                remote_channels[i] = 0;
-            }
-        }
-        return;
-    }
 
     if (remote_mode == REMOTE_MODE_ADC) {
         // ADC 采样由 DMA 自动更新到 adc_buffer
@@ -224,7 +192,7 @@ static void init_ppm_input(void) {
     // PPM输入通常使用定时器输入捕获
     // 这里需要根据具体硬件配置
     
-    printf("PPM输入初始化\n");
+    printf("PPM input init\n");
     
     // 示例配置 - 需要根据实际硬件修改
     // 1. 配置GPIO为输入
@@ -242,7 +210,7 @@ static void init_pwm_input(void) {
     // PWM输入使用ADC或输入捕获
     // 这里需要根据具体硬件配置
     
-    printf("PWM输入初始化\n");
+    printf("PWM input init\n");
     
     // 示例配置 - 需要根据实际硬件修改
     // 1. 配置ADC通道
@@ -259,7 +227,7 @@ static void init_adc_input(void) {
     // ADC输入用于模拟遥控器
     // 需要配置ADC通道
     
-    printf("ADC输入初始化\n");
+    printf("ADC input init\n");
     
     // ADC已经在setup.c中初始化
     // 这里只需要配置通道映射
@@ -268,66 +236,6 @@ static void init_adc_input(void) {
     remote_config.max_value = 4095;
     remote_config.center_value = 2048;
     remote_config.deadband = 50;
-}
-
-/**
- * @brief 初始化UART输入
- */
-static void init_uart_input(void) {
-    // UART输入用于串口遥控器，复用 UART3 作为调试输出和遥控输入。
-    // 期望接收 ASCII 帧: ch0,ch1,ch2,ch3,ch4,ch5,ch6,ch7\n
-    // 例如: 1000,0,-1000,0,1000,0,0,0\n
-    printf("UART输入初始化\n");
-    remote_connected = RESET;
-    uart_rx_index = 0;
-}
-
-static void process_uart_frame(void) {
-    uart_rx_buffer[uart_rx_index] = '\0';
-    char* token = strtok((char*)uart_rx_buffer, ",");
-    int idx = 0;
-
-    while (token != NULL && idx < 8) {
-        long value = strtol(token, NULL, 10);
-        remote_channels[idx] = CLAMP((int16_t)value, -1000, 1000);
-        token = strtok(NULL, ",");
-        idx++;
-    }
-
-    // 如果只解析出一个有效值，仍然认为远程已连接
-    if (idx > 0) {
-        for (; idx < 8; idx++) {
-            remote_channels[idx] = 0;
-        }
-        remote_connected = SET;
-        last_remote_update = GetSystemTicks();
-    }
-
-    uart_rx_index = 0;
-}
-
-static void update_uart_input(void) {
-    while (usart_flag_get(DEBUG_USART, USART_FLAG_RBNE) != RESET) {
-        uint8_t ch = usart_data_receive(DEBUG_USART);
-        last_remote_update = GetSystemTicks();
-
-        if (ch == '\r') {
-            continue;
-        }
-        if (ch == '\n') {
-            if (uart_rx_index > 0) {
-                process_uart_frame();
-            }
-            continue;
-        }
-
-        if (uart_rx_index < sizeof(uart_rx_buffer) - 1) {
-            uart_rx_buffer[uart_rx_index++] = ch;
-        } else {
-            // 缓冲区溢出，丢弃当前帧
-            uart_rx_index = 0;
-        }
-    }
 }
 
 /**
@@ -425,7 +333,7 @@ static void update_simulated_input(void) {
     
     // 每5秒输出一次调试信息
     if (sim_counter % 1000 == 0) {
-        printf("模拟遥控器: 油门=%d, 转向=%d\n", sim_throttle, sim_steering);
+        printf("Simulated remote: throttle=%d, steering=%d\n", sim_throttle, sim_steering);
     }
 }
 

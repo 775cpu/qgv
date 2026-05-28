@@ -150,7 +150,7 @@ void USART_SendDebugInfo(DebugInfo* info) {
     
     char buffer[256];
     snprintf(buffer, sizeof(buffer),
-             "状态:%d 电池:%.1fV 电流:%.1fA 左电机:%d/%d 右电机:%d/%d 控制:T:%d S:%d\n",
+             "State:%d Battery:%.1fV Current:%.1fA Left:%d/%d Right:%d/%d Ctrl:T:%d S:%d\n",
              info->system_state,
              info->battery_voltage,
              info->total_current,
@@ -211,34 +211,34 @@ static void process_command(const char* command) {
     
     // 简单的命令解析
     if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-        USART_SendString("可用命令:\r\n");
-        USART_SendString("  help/?      - 显示帮助\r\n");
-        USART_SendString("  status      - 显示系统状态\r\n");
-        USART_SendString("  enable      - 使能电机\r\n");
-        USART_SendString("  disable     - 禁用电机\r\n");
-        USART_SendString("  pwm <value> - 设置PWM值 (-1000~1000)\r\n");
-        USART_SendString("  remote      - 显示遥控器状态\r\n");
-        USART_SendString("  reset       - 复位系统\r\n");
+        USART_SendString("Available commands:\r\n");
+        USART_SendString("  help/?      - show help\r\n");
+        USART_SendString("  status      - show system status\r\n");
+        USART_SendString("  enable      - enable motor\r\n");
+        USART_SendString("  disable     - disable motor\r\n");
+        USART_SendString("  pwm <value> - set PWM value (-1000~1000)\r\n");
+        USART_SendString("  remote      - show remote status\r\n");
+        USART_SendString("  reset       - reset system\r\n");
     } else if (strcmp(command, "status") == 0) {
-        USART_SendString("系统状态命令\r\n");
+        USART_SendString("System status command\r\n");
     } else if (strcmp(command, "enable") == 0) {
-        USART_SendString("电机使能\r\n");
+        USART_SendString("Motor enabled\r\n");
         // 这里可以调用使能函数
     } else if (strcmp(command, "disable") == 0) {
-        USART_SendString("电机禁用\r\n");
+        USART_SendString("Motor disabled\r\n");
         // 这里可以调用禁用函数
     } else if (strncmp(command, "pwm ", 4) == 0) {
         int16_t pwm_value = atoi(command + 4);
-        USART_Printf("设置PWM值: %d\r\n", pwm_value);
+        USART_Printf("Set PWM value: %d\r\n", pwm_value);
         // 这里可以调用设置PWM函数
     } else if (strcmp(command, "remote") == 0) {
-        USART_SendString("遥控器状态命令\r\n");
+        USART_SendString("Remote status command\r\n");
     } else if (strcmp(command, "reset") == 0) {
-        USART_SendString("系统复位...\r\n");
+        USART_SendString("System reset...\r\n");
         NVIC_SystemReset();
     } else {
-        USART_Printf("未知命令: %s\r\n", command);
-        USART_SendString("输入 'help' 查看可用命令\r\n");
+        USART_Printf("Unknown command: %s\r\n", command);
+        USART_SendString("Type 'help' for commands\r\n");
     }
 }
 

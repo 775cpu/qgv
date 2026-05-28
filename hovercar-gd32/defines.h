@@ -96,8 +96,8 @@
 #define DEBUG_USART_RX_PORT  GPIOB
 #define DEBUG_USART_RX_PIN   GPIO_PIN_11  // PB11 - USART2_RX (full remap)
 
-// UART遥控器输入（右侧数字接口）
-#define REMOTE_UART_BAUDRATE 115200
+// Debug UART baud rate (USART2 on PB10/PB11)
+#define DEBUG_UART_BAUDRATE 115200
 
 // 电源自锁（Power Latch）引脚 - 典型板子使用 PA11
 #define PWR_LATCH_PORT       GPIOA
@@ -134,7 +134,6 @@ typedef enum {
     REMOTE_MODE_PPM,
     REMOTE_MODE_PWM,
     REMOTE_MODE_ADC,
-    REMOTE_MODE_UART,
     REMOTE_MODE_CRSF,
     REMOTE_MODE_SBUS
 } RemoteMode;

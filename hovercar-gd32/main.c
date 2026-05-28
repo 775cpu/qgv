@@ -55,12 +55,12 @@ int main(void) {
     // 1. 系统初始化
     system_init();
     
-    // 2. 上电自检序列：每秒蜂鸣一次，电机速度分10挡逐步提升
-    printf("启动自检序列: 电机速度 10 阶，蜂鸣长度逐步增加\n");
+    // 2. 电机自检序列：每秒蜂鸣一次，电机速度分10挡逐步提升
+    printf("Startup self-check: motor speed 10 steps, increasing beep length\n");
     startup_ramp_sequence();
 
     // 3. 等待使能
-    printf("等待使能信号...\n");
+    printf("Waiting for enable signal...\n");
     while (vehicle.enable == RESET) {
         handle_button_input();
         Delay(10);
@@ -71,7 +71,7 @@ int main(void) {
     beep_pattern(2);
     system_state = 1;
     
-    printf("系统就绪，开始主循环\n");
+    printf("System ready, entering main loop\n");
     
     // 5. 主控制循环
     while (1) {
@@ -112,18 +112,17 @@ static void system_init(void) {
     // 7. BLDC驱动
     BLDC_Init();
     
-    // 8. 串口初始化 (调试 / UART 遥控共用 UART3)
-    //USART_Init(REMOTE_UART_BAUDRATE);
-    //Remote_Init(REMOTE_MODE_UART);  // 使用UART串口遥控输入
+// 8. UART debug initialization
+    USART_Init(DEBUG_UART_BAUDRATE);
     
     // 9. 默认关闭电压检测
     BatteryVoltageCheck_Disable();
     
     printf("================================\n");
-    printf("hovercar-gd32 双电机控制器\n");
-    printf("版本: 1.0.0\n");
-    printf("系统时钟: %lu Hz\n", SystemCoreClock);
-    printf("PWM频率: %d Hz\n", PWM_FREQ);
+    printf("hovercar-gd32 dual motor controller\n");
+    printf("Version: 1.0.0\n");
+    printf("System clock: %lu Hz\n", SystemCoreClock);
+    printf("PWM frequency: %d Hz\n", PWM_FREQ);
     printf("================================\n");
     
     system_state = 0;
@@ -219,7 +218,7 @@ static void safety_check(void) {
     // 1. 电池电压检测（默认可关闭）
     if (BatteryVoltageCheck_IsEnabled()) {
         if (vehicle.battery_voltage < BATTERY_DEAD_VOLTAGE) {
-            printf("错误: 电池电压过低 %.1fV\n", vehicle.battery_voltage);
+            printf("Error: battery voltage too low %.1fV\n", vehicle.battery_voltage);
             current_error |= 0x01;
             
             // 低压关机
@@ -238,7 +237,7 @@ static void safety_check(void) {
     // 2. 电流检测
     float current = GetTotalCurrent();
     if (current > CURRENT_LIMIT) {
-        printf("警告: 电流过高 %.1fA\n", current);
+        printf("Warning: current too high %.1fA\n", current);
         current_error |= 0x02;
     }
     
@@ -250,20 +249,20 @@ static void safety_check(void) {
     // 4. 霍尔传感器检测
     // 检查霍尔信号是否有效
     if (error_count > 10) {
-        printf("错误: 传感器故障\n");
+        printf("Error: sensor fault\n");
         current_error |= 0x08;
         system_state = 3;  // 错误状态
     }
     
     // 5. 无操作超时
     if (inactivity_counter > (INACTIVITY_TIMEOUT * 60 * 1000 / DELAY_IN_MAIN_LOOP)) {
-        printf("无操作超时，准备关机\n");
+        printf("Inactivity timeout, shutting down\n");
         shutdown_procedure();
     }
     
     // 6. 遥控器超时
     if (remote_timeout == SET) {
-        printf("遥控器信号丢失\n");
+        printf("Remote signal lost\n");
         current_error |= 0x10;
     }
     
@@ -344,7 +343,7 @@ static void handle_button_input(void) {
         // 长按检测 (3秒)
         if (GetSystemTicks() - button_press_time > 3000) {
             // 长按关机
-            printf("长按关机\n");
+            printf("Long press shutdown\n");
             shutdown_procedure();
         }
     } else {
@@ -355,7 +354,7 @@ static void handle_button_input(void) {
             if (press_duration < 1000) {
                 // 短按切换使能状态
                 vehicle.enable = !vehicle.enable;
-                printf("使能状态: %s\n", vehicle.enable ? "ON" : "OFF");
+                printf("Enable state: %s\n", vehicle.enable ? "ON" : "OFF");
                 
                 if (vehicle.enable) {
                     beep_pattern(2);  // 使能音
@@ -445,7 +444,7 @@ static void startup_ramp_sequence(void) {
 // ============================================
 
 static void shutdown_procedure(void) {
-    printf("执行关机程序\n");
+    printf("Executing shutdown procedure\n");
     
     // 1. 禁用电机
     SetMotorsEnable(RESET);
@@ -468,7 +467,7 @@ static void shutdown_procedure(void) {
         Delay(100);
     }
     
-    printf("系统关机\n");
+    printf("System shutdown\n");
     
     // 6. 进入低功耗模式或等待看门狗复位
     // 释放电源自锁，硬件会在松开闩锁后断电
@@ -503,7 +502,7 @@ static void debug_output(void) {
     // USART_SendDebugInfo(&info);
     
     // 或者使用printf
-    printf("状态:%d 电池:%.1fV 电流:%.1fA 左电机:%d/%d 右电机:%d/%d 控制:T:%d S:%d\n",
+    printf("State:%d Bat:%.1fV Curr:%.1fA Lmotor:%d/%d Rmotor:%d/%d ctrl:T:%d S:%d\n",
            info.system_state,
            info.battery_voltage,
            info.total_current,

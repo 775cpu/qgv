@@ -82,7 +82,7 @@ void SystemClock_Init(void) {
     // 7. 更新SystemCoreClock变量
     SystemCoreClock = SYSTEM_CORE_CLOCK;
     
-    printf("系统时钟初始化完成: %lu Hz\n", SystemCoreClock);
+    printf("System clock init complete: %lu Hz\n", SystemCoreClock);
 }
 
 /**
@@ -91,14 +91,14 @@ void SystemClock_Init(void) {
 void SysTick_Init(void) {
     // 配置SysTick为1ms中断
     if (SysTick_Config(SystemCoreClock / 1000)) {
-        printf("SysTick配置失败\n");
+        printf("SysTick config failed\n");
         while (1);
     }
     
     // 设置SysTick中断优先级
     NVIC_SetPriority(SysTick_IRQn, 0x00);
     
-    printf("SysTick初始化完成\n");
+    printf("SysTick init complete\n");
 }
 
 /**
@@ -114,7 +114,7 @@ void GPIO_Init(void) {
     // 禁用JTAG，启用SWD (释放PA15, PB3, PB4)
     gpio_pin_remap_config(GPIO_SWJ_SWDPENABLE_REMAP, ENABLE);
     
-    printf("GPIO时钟使能完成\n");
+    printf("GPIO clocks enabled\n");
     
     // 1. 初始化PWM输出引脚
     init_pwm_pins();
@@ -128,7 +128,7 @@ void GPIO_Init(void) {
     // 4. 初始化ADC引脚
     init_adc_pins();
     
-    printf("GPIO初始化完成\n");
+    printf("GPIO init complete\n");
 }
 
 /**
@@ -146,7 +146,7 @@ void PWM_Timer_Init(void) {
     // 3. 初始化右电机定时器 (TIM3, TIM4)
     init_right_motor_timer();
     
-    printf("PWM定时器初始化完成\n");
+    printf("PWM timer init complete\n");
 }
 
 /**
@@ -166,7 +166,7 @@ void ADC_Init(void) {
     // 4. 初始化DMA
     init_adc_dma();
     
-    printf("ADC初始化完成\n");
+    printf("ADC init complete\n");
 }
 
 /**
@@ -176,19 +176,19 @@ void Watchdog_Init(void) {
     // 检查是否看门狗复位
     if (RESET != rcu_flag_get(RCU_FLAG_FWDGTRST)) {
         rcu_all_reset_flag_clear();
-        printf("看门狗复位检测\n");
+        printf("Watchdog reset detected\n");
     }
     
     // 配置看门狗: 40kHz/16, 4096计数 = 1.6384秒
     if (fwdgt_config(0x0FFF, FWDGT_PSC_DIV16) != SUCCESS) {
-        printf("看门狗配置失败\n");
+        printf("Watchdog config failed\n");
         while (1);
     }
     
     // 使能看门狗
     fwdgt_enable();
     
-    printf("看门狗初始化完成\n");
+    printf("Watchdog init complete\n");
 }
 
 /**
