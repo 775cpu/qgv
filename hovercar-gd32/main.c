@@ -113,7 +113,7 @@ static void system_init(void) {
     BLDC_Init();
     
 // 8. UART debug initialization
-    //USART_Init(DEBUG_UART_BAUDRATE);
+    USART_Init(DEBUG_UART_BAUDRATE);
     
     // 9. 默认关闭电压检测
     BatteryVoltageCheck_Disable();
@@ -121,7 +121,7 @@ static void system_init(void) {
     printf("================================\n");
     printf("hovercar-gd32 dual motor controller\n");
     printf("Version: 1.0.0\n");
-    printf("System clock: %lu Hz\n", SystemCoreClock);
+    
     printf("PWM frequency: %d Hz\n", PWM_FREQ);
     printf("================================\n");
     
@@ -501,7 +501,7 @@ static void debug_output(void) {
     // 使用串口发送调试信息
     // USART_SendDebugInfo(&info);
     
-    // 或者使用printf
+    printf("SystemCoreClock: %d [%lu Hz]\n", (unsigned int)SystemCoreClock, (unsigned long)SystemCoreClock);
     printf("State:%d Bat:%.1fV Curr:%.1fA Lmotor:%d/%d Rmotor:%d/%d ctrl:T:%d S:%d\n",
            info.system_state,
            info.battery_voltage,
