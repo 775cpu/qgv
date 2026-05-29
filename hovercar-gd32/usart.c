@@ -415,83 +415,70 @@ static void cmd_pwm_all(const char* hzstr, const char* dutystr) {
 
 // 为单个引脚配置 PWM（目前实现 PA3 -> TIM1_CH3）
 static void cmd_pwm_pin(const char* pinstr, int hz, int duty) {
-    // defaults already applied by caller
-    if (hz <= 0 || duty < 0 || duty > 100) {
-        USART_SendString("pwm pin usage: pwm PA3 [hz] [duty_percent]\r\n");
-        return;
-    }
-
-    // parse pin - accept PA3 or A3 etc
+    // 1. 解析引脚（保持你的逻辑）
     uint32_t port; uint16_t pin;
     if (!parse_pin_string(pinstr, &port, &pin)) {
         USART_Printf("Unsupported pin: %s\r\n", pinstr);
         return;
     }
 
-    // Only implement PA3 -> TIM2_CH4 for now
+    // 严格校验是否为 PA3
     if ((uint32_t)GPIOA != port || pin != GPIO_PIN_3) {
-        USART_Printf("pwm pin: only PA3 currently supported for single-pin PWM\r\n");
+        USART_Printf("pwm pin: only PA3 currently supported\r\n");
         return;
     }
 
+    // 2. 计算定时器参数
     uint32_t prescaler;
     uint32_t period;
     if (!calculate_pwm_timer_params(hz, &prescaler, &period)) {
         USART_Printf("Requested frequency out of range: %d Hz\r\n", hz);
         return;
     }
-
     uint32_t pulse = (((uint32_t)period + 1U) * (uint32_t)duty) / 100U;
-    if (pulse > period) {
-        pulse = period;
-    }
 
-    // Follow sequence: reset/clock enable, enable AF, clear TIM2 remap bits, set PA3 AF_PP
-    rcu_periph_reset_enable(RCU_TIMER1RST);
-    rcu_periph_reset_disable(RCU_TIMER1RST);
-    rcu_periph_clock_enable(RCU_TIMER1);
+    // 3. 开启时钟：GPIOA 和 TIMER1 (注意：GD32F103的 TIMER1 在 APB1 总线上)
     rcu_periph_clock_enable(RCU_GPIOA);
-    rcu_periph_clock_enable(RCU_AF);
-    volatile uint32_t* AFIO_MAPR = (uint32_t*)0x40010004;
-    /* clear TIMER1 remap bits (bits 9:8) so TIM1 channel maps to PA3 */
-    *AFIO_MAPR &= ~(3 << 8);
+    rcu_periph_clock_enable(RCU_TIMER1);
+    // 注意：默认复用功能不需要开启 AFIO 时钟，也绝对不要去改 AFIO_MAPR 寄存器！
 
-    // configure PA3 as AF push-pull
+    // 4. 配置 PA3 为复用推挽输出 (AF_PP)
     gpio_init(GPIOA, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_3);
 
-    // configure TIMER1 CH3 (PA3)
-    timer_parameter_struct timer_init_struct;
-    timer_oc_parameter_struct oc_init_struct;
+    // 5. 初始化 TIMER1 基础配置
     timer_deinit(TIMER1);
-    timer_init_struct.prescaler = (uint16_t)prescaler;
-    timer_init_struct.alignedmode = TIMER_COUNTER_CENTER_BOTH;
-    timer_init_struct.counterdirection = TIMER_COUNTER_UP;
-    timer_init_struct.period = (uint16_t)period;
-    timer_init_struct.clockdivision = TIMER_CKDIV_DIV1;
+    timer_parameter_struct timer_init_struct;
+    timer_init_struct.prescaler         = (uint16_t)prescaler;
+    timer_init_struct.alignedmode       = TIMER_COUNTER_EDGE; // 边沿对齐即可，更稳定
+    timer_init_struct.counterdirection  = TIMER_COUNTER_UP;
+    timer_init_struct.period            = (uint16_t)period;
+    timer_init_struct.clockdivision     = TIMER_CKDIV_DIV1;
     timer_init_struct.repetitioncounter = 0;
     timer_init(TIMER1, &timer_init_struct);
 
-    oc_init_struct.outputstate = TIMER_CCX_ENABLE;
-    oc_init_struct.outputnstate = TIMER_CCXN_DISABLE;
-    oc_init_struct.ocpolarity = TIMER_OC_POLARITY_HIGH;
-    oc_init_struct.ocnpolarity = TIMER_OCN_POLARITY_LOW;
-    oc_init_struct.ocidlestate = TIMER_OC_IDLE_STATE_LOW;
-    oc_init_struct.ocnidlestate = TIMER_OCN_IDLE_STATE_HIGH;
-
+    // 6. 配置 TIMER1_CH3 (对应底层通道 3，即物理第四个通道) 为 PWM1 模式
+    timer_oc_parameter_struct oc_init_struct;
+    oc_init_struct.outputstate  = TIMER_CCX_ENABLE;         // 开启输出
+    oc_init_struct.ocpolarity   = TIMER_OC_POLARITY_HIGH;   // 高电平有效
+    oc_init_struct.ocidlestate  = TIMER_OC_IDLE_STATE_LOW;
+    // 针对通用定时器，剔除不必要的 N 互补通道配置
     timer_channel_output_config(TIMER1, TIMER_CH_3, &oc_init_struct);
+
+    // 7. 写入占空比并使能预装载 (Shadow)
     timer_channel_output_mode_config(TIMER1, TIMER_CH_3, TIMER_OC_MODE_PWM1);
     timer_channel_output_pulse_value_config(TIMER1, TIMER_CH_3, (uint16_t)pulse);
-    /* enable channel output compare shadow (preload) so CCR updates take effect on update event */
     timer_channel_output_shadow_config(TIMER1, TIMER_CH_3, TIMER_OC_SHADOW_ENABLE);
-    /* ensure channel output is enabled */
-    timer_channel_output_state_config(TIMER1, TIMER_CH_3, TIMER_CCX_ENABLE);
-    timer_auto_reload_shadow_enable(TIMER1);
-    timer_update_event_enable(TIMER1);
+    
+    // 8. 强行触发一次更新事件，让刚才写的 Period 和 Pulse 立即生效
+    timer_event_software_generate(TIMER1, TIMER_EVENT_SRC_UPG);
 
+    // 9. 开启定时器
+    timer_auto_reload_shadow_enable(TIMER1);
     timer_enable(TIMER1);
 
-    USART_Printf("PWM pin %s set: %d Hz, duty %d%% (psc=%lu, period=%lu, pulse=%lu)\r\n", pinstr, hz, duty, prescaler, period, pulse);
+    USART_Printf("PA3 (TIMER1_CH3) PWM active: %d Hz, duty %d%%\r\n", hz, duty);
 }
+
 
 /**
  * @brief 处理命令
