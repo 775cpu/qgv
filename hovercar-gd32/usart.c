@@ -7,7 +7,9 @@
 #include "gd32f10x.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "firmware_api.h"
+#include "buzzer.h"
 
 // ============================================
 // 全局变量
@@ -24,6 +26,13 @@ static uint16_t tx_index = 0;
 static uint16_t tx_length = 0;
 
 static void process_command(const char* command);
+
+// 外部声明（来自 main.c 和 bldc.c）
+extern VehicleControl vehicle;
+extern uint8_t system_state;
+extern MotorState left_motor;
+extern MotorState right_motor;
+extern adc_buf_t adc_buffer;
 
 // ============================================
 // 公共函数
@@ -233,6 +242,12 @@ static void process_received_char(uint8_t ch) {
     }
 }
 
+// 命令帮助函数
+static int16_t parse_pwm_value(const char* str) {
+    int16_t value = atoi(str);
+    return CLAMP(value, -1000, 1000);
+}
+
 /**
  * @brief 处理命令
  * @param command 命令字符串
@@ -242,36 +257,163 @@ static void process_command(const char* command) {
         return;
     }
     
-    // 简单的命令解析
-    if (strcmp(command, "help") == 0 || strcmp(command, "?") == 0) {
-        USART_SendString("Available commands:\r\n");
-        USART_SendString("  help/?      - show help\r\n");
-        USART_SendString("  status      - show system status\r\n");
-        USART_SendString("  enable      - enable motor\r\n");
-        USART_SendString("  disable     - disable motor\r\n");
-        USART_SendString("  pwm <value> - set PWM value (-1000~1000)\r\n");
-        USART_SendString("  remote      - show remote status\r\n");
-        USART_SendString("  reset       - reset system\r\n");
-    } else if (strcmp(command, "status") == 0) {
-        USART_SendString("System status command\r\n");
-    } else if (strcmp(command, "enable") == 0) {
-        USART_SendString("Motor enabled\r\n");
-        // 这里可以调用使能函数
-    } else if (strcmp(command, "disable") == 0) {
-        USART_SendString("Motor disabled\r\n");
-        // 这里可以调用禁用函数
-    } else if (strncmp(command, "pwm ", 4) == 0) {
-        int16_t pwm_value = atoi(command + 4);
-        USART_Printf("Set PWM value: %d\r\n", pwm_value);
-        // 这里可以调用设置PWM函数
-    } else if (strcmp(command, "remote") == 0) {
-        USART_SendString("Remote status command\r\n");
-    } else if (strcmp(command, "reset") == 0) {
-        USART_SendString("System reset...\r\n");
+    char cmd_copy[256];
+    strncpy(cmd_copy, command, sizeof(cmd_copy) - 1);
+    cmd_copy[sizeof(cmd_copy) - 1] = '\0';
+    
+    // 转换为小写以便比较
+    for (int i = 0; cmd_copy[i]; i++) {
+        if (cmd_copy[i] >= 'A' && cmd_copy[i] <= 'Z') {
+            cmd_copy[i] += 32;
+        }
+    }
+    
+    // 命令处理
+    if (strcmp(cmd_copy, "help") == 0 || strcmp(cmd_copy, "?") == 0) {
+        USART_SendString("\r\n=== HOVERCAR SERIAL COMMANDS ===\r\n");
+        USART_SendString("Motor Control:\r\n");
+        USART_SendString("  motor enable              - Enable motors\r\n");
+        USART_SendString("  motor disable             - Disable motors\r\n");
+        USART_SendString("  motor left <pwm>          - Set left motor PWM (-1000~1000)\r\n");
+        USART_SendString("  motor right <pwm>         - Set right motor PWM (-1000~1000)\r\n");
+        USART_SendString("  motor both <pwm>          - Set both motors PWM (-1000~1000)\r\n");
+        USART_SendString("\r\nSystem Status:\r\n");
+        USART_SendString("  status                    - Show system status\r\n");
+        USART_SendString("  adc                       - Show ADC values\r\n");
+        USART_SendString("  battery                   - Show battery voltage\r\n");
+        USART_SendString("  current                   - Show motor current\r\n");
+        USART_SendString("  speed                     - Show motor speeds\r\n");
+        USART_SendString("  hall                      - Show hall sensor states\r\n");
+        USART_SendString("\r\nBuzzer Control:\r\n");
+        USART_SendString("  beep <n>                  - Beep n times (1-10)\r\n");
+        USART_SendString("  buzzer <pattern>          - Play buzzer pattern\r\n");
+        USART_SendString("\r\nSystem:\r\n");
+        USART_SendString("  reset                     - Reset system\r\n");
+        USART_SendString("  help/?                    - Show this help\r\n");
+        USART_SendString("================================\r\n");
+    }
+    
+    else if (strncmp(cmd_copy, "motor ", 6) == 0) {
+        const char* motor_cmd = command + 6;
+        
+        if (strncmp(motor_cmd, "enable", 6) == 0) {
+            SetMotorsEnable(SET);
+            vehicle.enable = SET;
+            USART_SendString("Motors enabled\r\n");
+        }
+        else if (strncmp(motor_cmd, "disable", 7) == 0) {
+            SetMotorsEnable(RESET);
+            vehicle.enable = RESET;
+            USART_SendString("Motors disabled\r\n");
+        }
+        else if (strncmp(motor_cmd, "left ", 5) == 0) {
+            int16_t pwm = parse_pwm_value(motor_cmd + 5);
+            SetLeftMotorPWM(pwm);
+            USART_Printf("Left motor PWM: %d\r\n", pwm);
+        }
+        else if (strncmp(motor_cmd, "right ", 6) == 0) {
+            int16_t pwm = parse_pwm_value(motor_cmd + 6);
+            SetRightMotorPWM(pwm);
+            USART_Printf("Right motor PWM: %d\r\n", pwm);
+        }
+        else if (strncmp(motor_cmd, "both ", 5) == 0) {
+            int16_t pwm = parse_pwm_value(motor_cmd + 5);
+            SetLeftMotorPWM(pwm);
+            SetRightMotorPWM(pwm);
+            USART_Printf("Both motors PWM: %d\r\n", pwm);
+        }
+        else {
+            USART_SendString("Motor command: enable|disable|left|right|both\r\n");
+        }
+    }
+    
+    else if (strcmp(cmd_copy, "status") == 0) {
+        USART_SendString("\r\n=== SYSTEM STATUS ===\r\n");
+        USART_Printf("State: %d (0=Init,1=Ready,2=Running,3=Error)\r\n", system_state);
+        USART_Printf("Battery: %.2fV\r\n", vehicle.battery_voltage);
+        USART_Printf("Current: %.2fA\r\n", GetTotalCurrent());
+        USART_Printf("Left Speed: %.0f RPM, Hall: %d\r\n", GetLeftMotorSpeed(), left_motor.hall_state);
+        USART_Printf("Right Speed: %.0f RPM, Hall: %d\r\n", GetRightMotorSpeed(), right_motor.hall_state);
+        USART_Printf("Throttle: %d, Steering: %d\r\n", vehicle.throttle, vehicle.steering);
+        USART_Printf("Motors Enabled: %s\r\n", vehicle.enable ? "YES" : "NO");
+        USART_SendString("====================\r\n");
+    }
+    
+    else if (strcmp(cmd_copy, "adc") == 0) {
+        USART_SendString("\r\n=== ADC VALUES ===\r\n");
+        USART_Printf("Battery ADC: %d (counts)\r\n", adc_buffer.battery);
+        USART_Printf("Current ADC: %d (counts)\r\n", adc_buffer.current);
+        USART_Printf("Temp ADC: %d (counts)\r\n", adc_buffer.temp);
+        USART_SendString("==================\r\n");
+    }
+    
+    else if (strcmp(cmd_copy, "battery") == 0) {
+        USART_Printf("Battery Voltage: %.2fV\r\n", vehicle.battery_voltage);
+        if (vehicle.battery_voltage < BATTERY_DEAD_VOLTAGE) {
+            USART_SendString("WARNING: Battery critically low!\r\n");
+        } else if (vehicle.battery_voltage < BATTERY_LOW_VOLTAGE) {
+            USART_SendString("WARNING: Battery low!\r\n");
+        } else {
+            USART_SendString("Battery status: Normal\r\n");
+        }
+    }
+    
+    else if (strcmp(cmd_copy, "current") == 0) {
+        float current = GetTotalCurrent();
+        USART_Printf("Motor Current: %.2fA\r\n", current);
+        if (current > CURRENT_LIMIT) {
+            USART_SendString("WARNING: Current exceeds limit!\r\n");
+        }
+    }
+    
+    else if (strcmp(cmd_copy, "speed") == 0) {
+        USART_Printf("Left Motor Speed: %.0f RPM\r\n", GetLeftMotorSpeed());
+        USART_Printf("Right Motor Speed: %.0f RPM\r\n", GetRightMotorSpeed());
+    }
+    
+    else if (strcmp(cmd_copy, "hall") == 0) {
+        USART_Printf("Left Hall State: 0x%02X (%d)\r\n", left_motor.hall_state, left_motor.hall_state);
+        USART_Printf("Right Hall State: 0x%02X (%d)\r\n", right_motor.hall_state, right_motor.hall_state);
+        USART_Printf("Left Motor Position: %d\r\n", left_motor.position);
+        USART_Printf("Right Motor Position: %d\r\n", right_motor.position);
+    }
+    
+    else if (strncmp(cmd_copy, "beep", 4) == 0) {
+        const char* param = command + 4;
+        while (*param == ' ') param++;
+        int beeps = atoi(param);
+        if (beeps > 0 && beeps <= 10) {
+            for (int i = 0; i < beeps; i++) {
+                beep_pattern(1);
+                Delay(100);
+            }
+            USART_Printf("Beep x%d\r\n", beeps);
+        } else {
+            USART_SendString("Beep count: 1-10\r\n");
+        }
+    }
+    
+    else if (strncmp(cmd_copy, "buzzer", 6) == 0) {
+        const char* param = command + 6;
+        while (*param == ' ') param++;
+        int pattern = atoi(param);
+        if (pattern > 0 && pattern <= 10) {
+            beep_pattern(pattern);
+            USART_Printf("Buzzer pattern: %d\r\n", pattern);
+        } else {
+            USART_SendString("Buzzer pattern: 1-10\r\n");
+        }
+    }
+    
+    else if (strcmp(cmd_copy, "reset") == 0) {
+        USART_SendString("System reset in 1 second...\r\n");
+        Delay(1000);
         NVIC_SystemReset();
-    } else {
-        USART_Printf("Unknown command: %s\r\n", command);
-        USART_SendString("Type 'help' for commands\r\n");
+    }
+    
+    else {
+        USART_Printf("Unknown command: '%s'\r\n", command);
+        USART_SendString("Type 'help' for available commands\r\n");
     }
 }
 

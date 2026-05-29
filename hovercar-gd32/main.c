@@ -28,7 +28,7 @@ VehicleControl vehicle = {
 static uint32_t inactivity_counter = 0;
 static FlagStatus remote_timeout = RESET;
 static FlagStatus battery_voltage_check_enabled = RESET;
-static uint8_t system_state = 0;  // 0=初始化, 1=就绪, 2=运行, 3=错误
+uint8_t system_state = 0;  // 0=初始化, 1=就绪, 2=运行, 3=错误 (非静态，供外部访问)
 
 // ============================================
 // 函数声明
@@ -86,6 +86,9 @@ int main(void) {
 // ============================================
 
 static void system_init(void) {
+    
+// 8. UART debug initialization
+    USART_Init(DEBUG_UART_BAUDRATE);
     // 1. 系统时钟
     SystemClock_Init();
     
@@ -112,8 +115,6 @@ static void system_init(void) {
     // 7. BLDC驱动
     BLDC_Init();
     
-// 8. UART debug initialization
-    USART_Init(DEBUG_UART_BAUDRATE);
     
     // 9. 默认关闭电压检测
     BatteryVoltageCheck_Disable();
