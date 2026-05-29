@@ -235,6 +235,219 @@ static void print_hall_pin_state(const char* label, uint16_t pin, uint8_t value)
     USART_Printf("  %s pin: 0x%04X value: %u\r\n", label, (unsigned)pin, (unsigned)value);
 }
 
+// 解析形如 "PA3" 的引脚描述，返回 1=成功，0=失败
+static int parse_pin_string(const char* s, uint32_t* out_port, uint16_t* out_pin) {
+    if (!s) return 0;
+    // Accept formats: PA3, pa3, A3, a3
+    const char* p = s;
+    // skip leading spaces
+    while (*p == ' ') p++;
+
+    char portch = 0;
+    const char* numptr = NULL;
+    if ((p[0] == 'P' || p[0] == 'p') && (p[1] >= 'A' && p[1] <= 'z')) {
+        portch = p[1];
+        numptr = p + 2;
+    } else if ((p[0] >= 'A' && p[0] <= 'z')) {
+        portch = p[0];
+        numptr = p + 1;
+    } else {
+        return 0;
+    }
+
+    if (portch >= 'a' && portch <= 'z') portch -= ('a' - 'A');
+    if (portch < 'A' || portch > 'G') return 0;
+
+    int pin = atoi(numptr);
+    if (pin < 0 || pin > 15) return 0;
+
+    switch (portch) {
+        case 'A': *out_port = (uint32_t)GPIOA; rcu_periph_clock_enable(RCU_GPIOA); break;
+        case 'B': *out_port = (uint32_t)GPIOB; rcu_periph_clock_enable(RCU_GPIOB); break;
+        case 'C': *out_port = (uint32_t)GPIOC; rcu_periph_clock_enable(RCU_GPIOC); break;
+        case 'D': *out_port = (uint32_t)GPIOD; rcu_periph_clock_enable(RCU_GPIOD); break;
+        case 'E': *out_port = (uint32_t)GPIOE; rcu_periph_clock_enable(RCU_GPIOE); break;
+        default: return 0;
+    }
+
+    *out_pin = (uint16_t)(1U << pin);
+    return 1;
+}
+
+// 读取任意引脚值（原始GPIO读数）并输出
+static void cmd_gpio_read(const char* arg) {
+    uint32_t port; uint16_t pin;
+    if (!parse_pin_string(arg, &port, &pin)) {
+        USART_SendString("gpio read usage: gpio read PA3\r\n");
+        return;
+    }
+    uint8_t raw = GPIO_INPUT_BIT_GET((uint32_t)port, pin);
+    USART_Printf("GPIO %s: raw=%d (pin mask 0x%04X)\r\n", arg, raw, pin);
+}
+
+// 将任意引脚设为输出并写入 0/1
+static void cmd_gpio_write(const char* arg, const char* valstr) {
+    uint32_t port; uint16_t pin;
+    if (!parse_pin_string(arg, &port, &pin)) {
+        USART_SendString("gpio write usage: gpio write PA3 1\r\n");
+        return;
+    }
+    int v = atoi(valstr);
+    // 配置为推挽输出
+    gpio_init((uint32_t)port, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ, pin);
+    if (v) gpio_bit_set((uint32_t)port, pin); else gpio_bit_reset((uint32_t)port, pin);
+    USART_Printf("GPIO %s set to %d\r\n", arg, v ? 1 : 0);
+}
+
+// 设置所有可用 PWM 定时器频率和占空比（默认 50%）
+static void cmd_pwm_all(const char* hzstr, const char* dutystr) {
+    int hz = atoi(hzstr);
+    int duty = dutystr ? atoi(dutystr) : 50;
+    if (hz <= 0 || duty < 0 || duty > 100) {
+        USART_SendString("pwm all usage: pwm all <hz> [duty_percent]\r\n");
+        return;
+    }
+
+    uint32_t period = (SYSTEM_CORE_CLOCK / 2) / (uint32_t)hz;
+    if (period < 10) period = 10;
+    if (period > 0xFFFF) {
+        USART_Printf("Requested freq too low or period too large: period=%lu\r\n", period);
+        return;
+    }
+
+    // Ensure timer and GPIO/AF clocks enabled and reset TIM1 as user script
+    rcu_periph_reset_enable(RCU_TIMER1RST);
+    rcu_periph_reset_disable(RCU_TIMER1RST);
+    rcu_periph_clock_enable(RCU_TIMER1);
+    rcu_periph_clock_enable(RCU_GPIOA);
+    rcu_periph_clock_enable(RCU_AF);
+    // Clear AFIO MAPR PWM remap bits for TIM1 CH3 on PA3 if needed
+    volatile uint32_t* AFIO_MAPR = (uint32_t*)0x40010004;
+    *AFIO_MAPR &= ~(3 << 8);
+
+    timer_parameter_struct timer_init_struct;
+    timer_oc_parameter_struct oc_init_struct;
+
+    // 通用定时器初始化结构
+    timer_deinit(TIMER1);
+    timer_init_struct.prescaler = 0;
+    timer_init_struct.alignedmode = TIMER_COUNTER_CENTER_BOTH;
+    timer_init_struct.counterdirection = TIMER_COUNTER_UP;
+    timer_init_struct.period = (uint16_t)period;
+    timer_init_struct.clockdivision = TIMER_CKDIV_DIV1;
+    timer_init_struct.repetitioncounter = 0;
+    timer_init(TIMER1, &timer_init_struct);
+
+    oc_init_struct.outputstate = TIMER_CCX_ENABLE;
+    oc_init_struct.outputnstate = TIMER_CCXN_ENABLE;
+    oc_init_struct.ocpolarity = TIMER_OC_POLARITY_HIGH;
+    oc_init_struct.ocnpolarity = TIMER_OCN_POLARITY_LOW;
+    oc_init_struct.ocidlestate = TIMER_OC_IDLE_STATE_LOW;
+    oc_init_struct.ocnidlestate = TIMER_OCN_IDLE_STATE_HIGH;
+
+    timer_channel_output_config(TIMER1, TIMER_CH_1, &oc_init_struct);
+    timer_channel_output_config(TIMER1, TIMER_CH_2, &oc_init_struct);
+    timer_channel_output_config(TIMER1, TIMER_CH_3, &oc_init_struct);
+
+    timer_channel_output_mode_config(TIMER1, TIMER_CH_1, TIMER_OC_MODE_PWM1);
+    timer_channel_output_mode_config(TIMER1, TIMER_CH_2, TIMER_OC_MODE_PWM1);
+    timer_channel_output_mode_config(TIMER1, TIMER_CH_3, TIMER_OC_MODE_PWM1);
+
+    uint16_t pulse = (uint16_t)((((uint32_t)period + 1U) * (uint32_t)duty) / 100U);
+    timer_channel_output_pulse_value_config(TIMER1, TIMER_CH_1, pulse);
+    timer_channel_output_pulse_value_config(TIMER1, TIMER_CH_2, pulse);
+    timer_channel_output_pulse_value_config(TIMER1, TIMER_CH_3, pulse);
+    timer_enable(TIMER1);
+
+    // TIM3 CH3
+    timer_deinit(TIMER3);
+    timer_init_struct.period = (uint16_t)period;
+    timer_init(TIMER3, &timer_init_struct);
+    timer_channel_output_config(TIMER3, TIMER_CH_3, &oc_init_struct);
+    timer_channel_output_mode_config(TIMER3, TIMER_CH_3, TIMER_OC_MODE_PWM1);
+    timer_channel_output_pulse_value_config(TIMER3, TIMER_CH_3, pulse);
+    timer_enable(TIMER3);
+
+    // TIM4 CH1, CH3
+    timer_deinit(TIMER4);
+    timer_init_struct.period = (uint16_t)period;
+    timer_init(TIMER4, &timer_init_struct);
+    timer_channel_output_config(TIMER4, TIMER_CH_1, &oc_init_struct);
+    timer_channel_output_config(TIMER4, TIMER_CH_3, &oc_init_struct);
+    timer_channel_output_mode_config(TIMER4, TIMER_CH_1, TIMER_OC_MODE_PWM1);
+    timer_channel_output_mode_config(TIMER4, TIMER_CH_3, TIMER_OC_MODE_PWM1);
+    timer_channel_output_pulse_value_config(TIMER4, TIMER_CH_1, pulse);
+    timer_channel_output_pulse_value_config(TIMER4, TIMER_CH_3, pulse);
+    timer_enable(TIMER4);
+
+    USART_Printf("PWM set: %d Hz, duty %d%% (period=%lu, pulse=%u)\r\n", hz, duty, period, pulse);
+}
+
+// 为单个引脚配置 PWM（目前实现 PA3 -> TIM1_CH3）
+static void cmd_pwm_pin(const char* pinstr, int hz, int duty) {
+    // defaults already applied by caller
+    if (hz <= 0 || duty < 0 || duty > 100) {
+        USART_SendString("pwm pin usage: pwm PA3 [hz] [duty_percent]\r\n");
+        return;
+    }
+
+    // parse pin - accept PA3 or A3 etc
+    uint32_t port; uint16_t pin;
+    if (!parse_pin_string(pinstr, &port, &pin)) {
+        USART_Printf("Unsupported pin: %s\r\n", pinstr);
+        return;
+    }
+
+    // Only implement PA3 -> TIM1_CH3 for now
+    if ((uint32_t)GPIOA != port || pin != GPIO_PIN_3) {
+        USART_Printf("pwm pin: only PA3 currently supported for single-pin PWM\r\n");
+        return;
+    }
+
+    // Follow sequence: reset/clock enable, enable AF, clear AFIO MAPR bits, set PA3 AF_PP
+    rcu_periph_reset_enable(RCU_TIMER1RST);
+    rcu_periph_reset_disable(RCU_TIMER1RST);
+    rcu_periph_clock_enable(RCU_TIMER1);
+    rcu_periph_clock_enable(RCU_GPIOA);
+    rcu_periph_clock_enable(RCU_AF);
+    volatile uint32_t* AFIO_MAPR = (uint32_t*)0x40010004;
+    *AFIO_MAPR &= ~(3 << 8);
+
+    // configure PA3 as AF push-pull
+    gpio_init(GPIOA, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_3);
+
+    // configure TIMER1 CH3
+    uint32_t period = (SYSTEM_CORE_CLOCK / 2) / (uint32_t)hz;
+    if (period < 10) period = 10;
+    timer_parameter_struct timer_init_struct;
+    timer_oc_parameter_struct oc_init_struct;
+    timer_deinit(TIMER1);
+    timer_init_struct.prescaler = 0;
+    timer_init_struct.alignedmode = TIMER_COUNTER_CENTER_BOTH;
+    timer_init_struct.counterdirection = TIMER_COUNTER_UP;
+    timer_init_struct.period = (uint16_t)period;
+    timer_init_struct.clockdivision = TIMER_CKDIV_DIV1;
+    timer_init_struct.repetitioncounter = 0;
+    timer_init(TIMER1, &timer_init_struct);
+
+    oc_init_struct.outputstate = TIMER_CCX_ENABLE;
+    oc_init_struct.outputnstate = TIMER_CCXN_ENABLE;
+    oc_init_struct.ocpolarity = TIMER_OC_POLARITY_HIGH;
+    oc_init_struct.ocnpolarity = TIMER_OCN_POLARITY_LOW;
+    oc_init_struct.ocidlestate = TIMER_OC_IDLE_STATE_LOW;
+    oc_init_struct.ocnidlestate = TIMER_OCN_IDLE_STATE_HIGH;
+
+    timer_channel_output_config(TIMER1, TIMER_CH_3, &oc_init_struct);
+    timer_channel_output_mode_config(TIMER1, TIMER_CH_3, TIMER_OC_MODE_PWM1);
+
+    uint16_t pulse = (uint16_t)((((uint32_t)period + 1U) * (uint32_t)duty) / 100U);
+    timer_channel_output_pulse_value_config(TIMER1, TIMER_CH_3, pulse);
+
+    timer_enable(TIMER1);
+
+    USART_Printf("PWM pin %s set: %d Hz, duty %d%% (period=%lu, pulse=%u)\r\n", pinstr, hz, duty, period, pulse);
+}
+
 /**
  * @brief 处理命令
  * @param command 命令字符串
@@ -313,6 +526,52 @@ static void process_command(const char* command) {
             USART_SendString("Motor command: enable|disable|left|right|both\r\n");
         }
     }
+
+        else if (strncmp(cmd_copy, "gpio ", 5) == 0) {
+            const char* args = command + 5;
+            while (*args == ' ') args++;
+            if (strncasecmp(args, "read ", 5) == 0) {
+                const char* pinstr = args + 5;
+                while (*pinstr == ' ') pinstr++;
+                cmd_gpio_read(pinstr);
+            } else if (strncasecmp(args, "write ", 6) == 0) {
+                const char* rest = args + 6;
+                while (*rest == ' ') rest++;
+                // split pin and value
+                char pinbuf[16]; int i=0;
+                while (*rest && *rest != ' ' && i < (int)sizeof(pinbuf)-1) pinbuf[i++] = *rest++;
+                pinbuf[i] = '\0';
+                while (*rest == ' ') rest++;
+                cmd_gpio_write(pinbuf, rest);
+            } else {
+                USART_SendString("gpio commands:\r\n  gpio read PA3\r\n  gpio write PA3 1\r\n");
+            }
+        }
+        else if (cmd_copy[0] == 'r' && cmd_copy[1] == ' ') {
+            const char* arg = command + 2;
+            while (*arg == ' ') arg++;
+            char pinbuf[16]; int i=0;
+            while (*arg && *arg != ' ' && i < (int)sizeof(pinbuf)-1) pinbuf[i++] = *arg++;
+            pinbuf[i] = '\0';
+            if (i == 0) {
+                USART_SendString("r usage: r PA3 or r A3\r\n");
+            } else {
+                cmd_gpio_read(pinbuf);
+            }
+        }
+        else if (cmd_copy[0] == 'w' && cmd_copy[1] == ' ') {
+            const char* rest = command + 2;
+            while (*rest == ' ') rest++;
+            char pinbuf[16]; int i=0;
+            while (*rest && *rest != ' ' && i < (int)sizeof(pinbuf)-1) pinbuf[i++] = *rest++;
+            pinbuf[i] = '\0';
+            while (*rest == ' ') rest++;
+            if (i == 0 || *rest == 0) {
+                USART_SendString("w usage: w PA3 1\r\n");
+            } else {
+                cmd_gpio_write(pinbuf, rest);
+            }
+        }
     
     else if (strcmp(cmd_copy, "status") == 0) {
         USART_SendString("\r\n=== SYSTEM STATUS ===\r\n");
@@ -356,6 +615,43 @@ static void process_command(const char* command) {
     else if (strcmp(cmd_copy, "speed") == 0) {
         USART_Printf("Left Motor Speed: %.0f RPM\r\n", GetLeftMotorSpeed());
         USART_Printf("Right Motor Speed: %.0f RPM\r\n", GetRightMotorSpeed());
+    }
+    
+    else if (strncmp(cmd_copy, "pwm ", 4) == 0) {
+        const char* args = command + 4;
+        while (*args == ' ') args++;
+        // args may be: all <hz> [duty]  OR  <pin> [hz] [duty]
+        if (strncasecmp(args, "all ", 4) == 0) {
+            const char* params = args + 4;
+            while (*params == ' ') params++;
+            // parse hz and optional duty
+            char hzbuf[16] = {0}; int i=0;
+            while (*params && *params != ' ' && i < (int)sizeof(hzbuf)-1) hzbuf[i++] = *params++;
+            hzbuf[i] = '\0';
+            while (*params == ' ') params++;
+            const char* dutystr = NULL;
+            if (*params) dutystr = params;
+            cmd_pwm_all(hzbuf, dutystr);
+        } else {
+            // treat first token as pin
+            char pinbuf[16] = {0}; int i=0;
+            const char* p = args;
+            while (*p && *p != ' ' && i < (int)sizeof(pinbuf)-1) pinbuf[i++] = *p++;
+            pinbuf[i] = '\0';
+            while (*p == ' ') p++;
+            const char* hzstr = NULL;
+            const char* dutystr = NULL;
+            if (*p) {
+                char hzbuf[32] = {0}; int j=0;
+                while (*p && *p != ' ' && j < (int)sizeof(hzbuf)-1) hzbuf[j++] = *p++;
+                hzbuf[j] = '\0';
+                hzstr = hzbuf;
+                while (*p == ' ') p++;
+                if (*p) dutystr = p;
+            }
+            if (pinbuf[0]) cmd_pwm_pin(pinbuf, hzstr, dutystr);
+            else USART_SendString("pwm commands:\r\n  pwm all <hz> [duty_percent]\r\n  pwm PA3 [hz] [duty]\r\n");
+        }
     }
     
     else if (strcmp(cmd_copy, "hall") == 0) {
