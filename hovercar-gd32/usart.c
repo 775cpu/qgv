@@ -639,18 +639,22 @@ static void process_command(const char* command) {
             while (*p && *p != ' ' && i < (int)sizeof(pinbuf)-1) pinbuf[i++] = *p++;
             pinbuf[i] = '\0';
             while (*p == ' ') p++;
-            const char* hzstr = NULL;
-            const char* dutystr = NULL;
+            int hz = 1;
+            int duty = 50;
             if (*p) {
-                char hzbuf[32] = {0}; int j=0;
-                while (*p && *p != ' ' && j < (int)sizeof(hzbuf)-1) hzbuf[j++] = *p++;
+                char hzbuf[32] = {0}; int j = 0;
+                while (*p && *p != ' ' && j < (int)sizeof(hzbuf) - 1) hzbuf[j++] = *p++;
                 hzbuf[j] = '\0';
-                hzstr = hzbuf;
+                if (hzbuf[0]) {
+                    hz = atoi(hzbuf);
+                }
                 while (*p == ' ') p++;
-                if (*p) dutystr = p;
+                if (*p) {
+                    duty = atoi(p);
+                }
             }
-            if (pinbuf[0]) cmd_pwm_pin(pinbuf, hzstr, dutystr);
-            else USART_SendString("pwm commands:\r\n  pwm all <hz> [duty_percent]\r\n  pwm PA3 [hz] [duty]\r\n");
+            if (pinbuf[0]) cmd_pwm_pin(pinbuf, hz, duty);
+            else USART_SendString("pwm commands:\r\n  pwm all <hz> [duty_percent]\r\n  pwm PA3 [hz] [duty_percent]\r\n");
         }
     }
     
