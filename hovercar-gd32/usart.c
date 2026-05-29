@@ -480,6 +480,12 @@ static void cmd_pwm_pin(const char* pinstr, int hz, int duty) {
     timer_channel_output_config(TIMER2, TIMER_CH_3, &oc_init_struct);
     timer_channel_output_mode_config(TIMER2, TIMER_CH_3, TIMER_OC_MODE_PWM1);
     timer_channel_output_pulse_value_config(TIMER2, TIMER_CH_3, (uint16_t)pulse);
+    /* enable channel output compare shadow (preload) so CCR updates take effect on update event */
+    timer_channel_output_shadow_config(TIMER2, TIMER_CH_3, TIMER_OC_SHADOW_ENABLE);
+    /* ensure channel output is enabled */
+    timer_channel_output_state_config(TIMER2, TIMER_CH_3, TIMER_CCX_ENABLE);
+    timer_auto_reload_shadow_enable(TIMER2);
+    timer_update_event_enable(TIMER2);
 
     timer_enable(TIMER2);
 
