@@ -14,6 +14,74 @@
 🟢 右绿线  PB11 ➡️ USART3_RX（单片机接收端）
 
 
+
+核心问题：GD32 vs STM32 的编号不同
+GD32F103 的寻址方案
+USART0: 0x40013800  (APB2)
+USART1: 0x40004400  (APB1) ← 对应 gd32f10x.h 中的 USART1_BASE
+USART2: 0x40004800  (APB1) ← 对应 gd32f10x.h 中的 USART2_BASE ✓ 你的板子
+USART3: 0x40004C00  (APB1)
+
+STM32F103 的寻址方案（标准 ARM Cortex-M3）
+USART1: 0x40013800  (APB2)
+USART2: 0x40004400  (APB1)
+USART3: 0x40004800  (APB1) ← STM32 标准中 0x40004800 是 USART3
+UART4:  0x40004C00  (APB1)
+UART5:  0x40005000  (APB1)
+
+为什么其他 AI 会犯错
+STM32 的广泛使用 — STM32F103 是工业标准，网上 99% 的 Cortex-M3 USART 教程都用 STM32
+固定映射记忆 — 许多 AI 被训练时学到"0x40004800 = USART3"这个 STM32 标准映射
+没有意识到品牌差异 — GD32 虽然是兼容克隆，但厂商设计了不同的编号方案
+为什么 GD32 这样做
+GD32 的设计选择：
+
+编号从 0 开始：USART0/1/2/3（共 4 个）
+STM32 编号从 1 开始：USART1/2/3 + UART4/5（USART 共 3 个，还有 UART）
+这导致了编号偏移：
+
+GD32 的 USART2 = STM32 的 USART3（地址相同：0x40004800）
+GD32 的 USART3 = STM32 的 UART4（地址相同：0x40004C00）
+忽视了 GD32 的“升配”小动作：
+STM32F103 的 0x40004C00 叫做 UART4（即通用异步收发器，不支持同步和智能卡模式等功能）；而 GD32 在设计时对这个外设进行了升级，使其支持同步模式，变成了 USART3（通用同步/异步收发器）。AI 很难注意到这种品牌之间“名字差一个字，外设级别变了”的细节。
+
+
+以下是 USART2 地址 0x40004800 的完整定义链：/workspaces/qgv/GD32/*
+
+📍 定义来源（两层嵌套）
+
+第 1 层：gd32f10x.h — USART_BASE 的基地址
+
+#define USART_BASE            (APB1_BUS_BASE + 0x00004400U)  /*!< USART base address */
+
+其中 APB1_BUS_BASE 定义为：
+
+#define APB1_BUS_BASE         ((uint32_t)0x40000000U)        /*!< apb1 base address */
+
+所以：USART_BASE = 0x40000000 + 0x00004400 = 0x40004400
+
+第 2 层：gd32f10x_usart.h — USART2 的相对偏移
+
+#define USART1                        USART_BASE                       /*!< USART1 base address */
+#define USART2                        (USART_BASE+(0x00000400U))       /*!< USART2 base address */
+#define UART3                         (USART_BASE+(0x00000800U))       /*!< UART3 base address */
+#define UART4                         (USART_BASE+(0x00000C00U))       /*!< UART4 base address */
+#define USART0                        (USART_BASE+(0x0000F400U))       /*!< USART0 base address */
+
+所以：USART2 = 0x40004400 + 0x400 = 0x40004800 ✓
+
+🎯 地址映射表（GD32F103 标准）
+外设	定义	地址	总线
+USART0	USART_BASE + 0xF400	0x4000F800	APB2
+USART1	USART_BASE + 0x0000	0x40004400	APB1
+USART2	USART_BASE + 0x0400	0x40004800	APB1 ← 你的板子
+UART3	USART_BASE + 0x0800	0x40004C00	APB1
+UART4	USART_BASE + 0x0C00	0x40005000	APB1
+
+你的 defines.h 用的正是 GD32 官方库定义的 USART2 = 0x40004800，完全正确。
+
+
+
 🎯 问题背景
 在使用 GDB 直接操作寄存器配置 GD32 串口接收（UART RX）时，遭遇了一系列极其反直觉的乱码和数据凝固现象。经过逐步排查，发现是三个经典的底层硬件机制交织导致的连环坑。
 

@@ -469,7 +469,7 @@ static void cmd_pwm_pin(const char* pinstr, int hz, int duty) {
     timer_init_struct.period = (uint16_t)period;
     timer_init_struct.clockdivision = TIMER_CKDIV_DIV1;
     timer_init_struct.repetitioncounter = 0;
-    timer_init(TIMER2, &timer_init_struct);
+    timer_init(TIMER1, &timer_init_struct);
 
     oc_init_struct.outputstate = TIMER_CCX_ENABLE;
     oc_init_struct.outputnstate = TIMER_CCXN_DISABLE;

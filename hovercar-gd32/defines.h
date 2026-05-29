@@ -87,7 +87,7 @@
 #define THROTTLE_ADC_PIN_1   GPIO_PIN_2   // PA2 - ADC1_CH2
 #define THROTTLE_ADC_PIN_2   GPIO_PIN_3   // PA3 - ADC1_CH3
 
-// 调试串口引脚（与 GDB 脚本/板子对齐，使用 USART2，重映射到 PB10/PB11）
+// USART2，重映射到 PB10/PB11）   GD32 的 USART2 = 0x40004800 而 STM32 同地址是 USART3，原因 hovercar-gd32/Read=uart.md
 #define DEBUG_USART          USART2
 #define DEBUG_USART_CLK      RCU_USART2
 #define DEBUG_USART_IRQn     USART2_IRQn
