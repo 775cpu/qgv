@@ -25,6 +25,21 @@ set *$TIMER1_SWEVG = (1 << 0)
 set *$TIMER1_CTL0 |= (1 << 0)
 
 
+
+
+设置 读取 gpio  pa2
+call (gpio_init(GPIOA, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_2), gpio_bit_set(GPIOA, GPIO_PIN_2))
+call (gpio_init(GPIOA, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_2), gpio_bit_reset(GPIOA, GPIO_PIN_2))
+call (rcu_periph_clock_enable(RCU_GPIOA), gpio_init(GPIOA, GPIO_MODE_IN_FLOATING, GPIO_OSPEED_50MHZ, GPIO_PIN_2), gpio_input_bit_get(GPIOA, GPIO_PIN_2))
+$4 = RESET
+call (rcu_periph_clock_enable(RCU_GPIOA), gpio_init(GPIOA, GPIO_MODE_IN_FLOATING, GPIO_OSPEED_50MHZ, GPIO_PIN_2), gpio_input_bit_get(GPIOA, GPIO_PIN_2))
+$5 = SET
+
+
+
+
+
+
 # 1. 基础时钟与引脚配置
 call rcu_periph_reset_enable(RCU_TIMER1)
 call rcu_periph_reset_disable(RCU_TIMER1)

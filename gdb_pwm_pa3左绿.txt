@@ -23,3 +23,6 @@ set *$TIMER1_CHCTL2 &= ~(1 << 13)
 set *$TIMER1_CHCTL2 |= (1 << 12)
 set *$TIMER1_SWEVG = (1 << 0)
 set *$TIMER1_CTL0 |= (1 << 0)
+
+
+

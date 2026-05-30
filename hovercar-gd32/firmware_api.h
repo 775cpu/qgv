@@ -31,6 +31,9 @@ void SetMotorsEnable(FlagStatus enable);
 void Mixer(int16_t throttle, int16_t steering, int16_t *left_pwm, int16_t *right_pwm);
 float GetLeftMotorSpeed(void);
 float GetRightMotorSpeed(void);
+uint8_t read_hall_sensors(uint32_t port_u, uint16_t pin_u,
+                          uint32_t port_v, uint16_t pin_v,
+                          uint32_t port_w, uint16_t pin_w);
 
 #define GPIO_INPUT_BIT_GET(port, pin) gpio_input_bit_get((port), (pin))
 

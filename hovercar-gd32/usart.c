@@ -227,13 +227,9 @@ static int16_t parse_pwm_value(const char* str) {
     return CLAMP(value, -1000, 1000);
 }
 
-static uint8_t read_hall_pin(uint32_t port, uint16_t pin) {
-    return (gpio_input_bit_get(port, pin) == SET) ? 1 : 0;
-}
 
-static void print_hall_pin_state(const char* label, uint16_t pin, uint8_t value) {
-    USART_Printf("  %s pin: 0x%04X value: %u\r\n", label, (unsigned)pin, (unsigned)value);
-}
+
+
 
 // 解析形如 "PA3" 的引脚描述，返回 1=成功，0=失败
 static int parse_pin_string(const char* s, uint32_t* out_port, uint16_t* out_pin) {
@@ -437,46 +433,54 @@ static void cmd_pwm_pin(const char* pinstr, int hz, int duty) {
     }
     uint32_t pulse = (((uint32_t)period + 1U) * (uint32_t)duty) / 100U;
 
-    // 3. 开启时钟：GPIOA 和 TIMER1 (注意：GD32F103的 TIMER1 在 APB1 总线上)
-    rcu_periph_clock_enable(RCU_GPIOA);
+    // 3. 严格按照 GDB 成功的逻辑配置
+    // 复位 TIMER1
+    rcu_periph_reset_enable(RCU_TIMER1RST);
+    rcu_periph_reset_disable(RCU_TIMER1RST);
+    
+    // 开启时钟
     rcu_periph_clock_enable(RCU_TIMER1);
-    // 注意：默认复用功能不需要开启 AFIO 时钟，也绝对不要去改 AFIO_MAPR 寄存器！
+    rcu_periph_clock_enable(RCU_GPIOA);
+    rcu_periph_clock_enable(RCU_AF);
+    
+    // 清除 AFIO_MAPR 的 Bit 9:8 (TIMER1 重映射控制位)
+    volatile uint32_t* AFIO_MAPR = (uint32_t*)0x40010004;
+    *AFIO_MAPR &= ~(3 << 8);
 
     // 4. 配置 PA3 为复用推挽输出 (AF_PP)
     gpio_init(GPIOA, GPIO_MODE_AF_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_3);
 
-    // 5. 初始化 TIMER1 基础配置
-    timer_deinit(TIMER1);
-    timer_parameter_struct timer_init_struct;
-    timer_init_struct.prescaler         = (uint16_t)prescaler;
-    timer_init_struct.alignedmode       = TIMER_COUNTER_EDGE; // 边沿对齐即可，更稳定
-    timer_init_struct.counterdirection  = TIMER_COUNTER_UP;
-    timer_init_struct.period            = (uint16_t)period;
-    timer_init_struct.clockdivision     = TIMER_CKDIV_DIV1;
-    timer_init_struct.repetitioncounter = 0;
-    timer_init(TIMER1, &timer_init_struct);
-
-    // 6. 配置 TIMER1_CH3 (对应底层通道 3，即物理第四个通道) 为 PWM1 模式
-    timer_oc_parameter_struct oc_init_struct;
-    oc_init_struct.outputstate  = TIMER_CCX_ENABLE;         // 开启输出
-    oc_init_struct.ocpolarity   = TIMER_OC_POLARITY_HIGH;   // 高电平有效
-    oc_init_struct.ocidlestate  = TIMER_OC_IDLE_STATE_LOW;
-    // 针对通用定时器，剔除不必要的 N 互补通道配置
-    timer_channel_output_config(TIMER1, TIMER_CH_3, &oc_init_struct);
-
-    // 7. 写入占空比并使能预装载 (Shadow)
-    timer_channel_output_mode_config(TIMER1, TIMER_CH_3, TIMER_OC_MODE_PWM1);
-    timer_channel_output_pulse_value_config(TIMER1, TIMER_CH_3, (uint16_t)pulse);
-    timer_channel_output_shadow_config(TIMER1, TIMER_CH_3, TIMER_OC_SHADOW_ENABLE);
+    // 5. 直接寄存器配置，严格匹配 GDB 脚本
+    volatile uint32_t* TIMER1_CTL0   = (uint32_t*)(TIMER1 + 0x00);
+    volatile uint32_t* TIMER1_SWEVG  = (uint32_t*)(TIMER1 + 0x14);
+    volatile uint32_t* TIMER1_CHCTL2 = (uint32_t*)(TIMER1 + 0x20);
+    volatile uint32_t* TIMER1_CHCTL1 = (uint32_t*)(TIMER1 + 0x1C);
+    volatile uint32_t* TIMER1_CNT    = (uint32_t*)(TIMER1 + 0x24);
+    volatile uint32_t* TIMER1_PSC    = (uint32_t*)(TIMER1 + 0x28);
+    volatile uint32_t* TIMER1_CAR    = (uint32_t*)(TIMER1 + 0x2C);
+    volatile uint32_t* TIMER1_CH3CV  = (uint32_t*)(TIMER1 + 0x40);
     
-    // 8. 强行触发一次更新事件，让刚才写的 Period 和 Pulse 立即生效
-    timer_event_software_generate(TIMER1, TIMER_EVENT_SRC_UPG);
+    // 设置计数器、预分频器、自动重载值
+    *TIMER1_CNT   = 0;
+    *TIMER1_PSC   = (uint32_t)prescaler;
+    *TIMER1_CAR   = (uint32_t)period;
+    *TIMER1_CH3CV = (uint32_t)pulse;
+    
+    // 配置通道3为PWM模式1
+    *TIMER1_CHCTL1 = (*TIMER1_CHCTL1 & ~0xFF) | 0x68;  // CH3配置为PWM模式1
+    
+    // 使能通道3输出
+    *TIMER1_CHCTL2 &= ~(1 << 13);  // 清除CH3N输出使能
+    *TIMER1_CHCTL2 |= (1 << 12);   // 设置CH3输出使能
+    
+    // 生成软件更新事件
+    *TIMER1_SWEVG = (1 << 0);
+    
+    // 使能定时器
+    *TIMER1_CTL0 |= (1 << 0);
 
-    // 9. 开启定时器
-    timer_auto_reload_shadow_enable(TIMER1);
-    timer_enable(TIMER1);
-
-    USART_Printf("PA3 (TIMER1_CH3) PWM active: %d Hz, duty %d%%\r\n", hz, duty);
+    USART_Printf("PA3 (TIMER1_CH3) PWM active: %d Hz, duty %d%% (psc=%lu, period=%lu, pulse=%lu)\r\n", 
+                 hz, duty, prescaler, period, pulse);
 }
 
 
@@ -691,29 +695,92 @@ static void process_command(const char* command) {
     }
     
     else if (strcmp(cmd_copy, "hall") == 0) {
-        uint8_t left_u = read_hall_pin(LEFT_HALL_U_PORT, LEFT_HALL_U_PIN);
-        uint8_t left_v = read_hall_pin(LEFT_HALL_V_PORT, LEFT_HALL_V_PIN);
-        uint8_t left_w = read_hall_pin(LEFT_HALL_W_PORT, LEFT_HALL_W_PIN);
-        uint8_t left_raw = (left_u << 0) | (left_v << 1) | (left_w << 2);
-
-        uint8_t right_u = read_hall_pin(RIGHT_HALL_U_PORT, RIGHT_HALL_U_PIN);
-        uint8_t right_v = read_hall_pin(RIGHT_HALL_V_PORT, RIGHT_HALL_V_PIN);
-        uint8_t right_w = read_hall_pin(RIGHT_HALL_W_PORT, RIGHT_HALL_W_PIN);
-        uint8_t right_raw = (right_u << 0) | (right_v << 1) | (right_w << 2);
-
+        // 使用 bldc.c 中的 read_hall_sensors 函数读取霍尔传感器
+        // 注意：read_hall_sensors 返回的是低电平有效的编码（0=高电平，1=低电平）
+        uint8_t left_hall_raw = read_hall_sensors(
+            LEFT_HALL_U_PORT, LEFT_HALL_U_PIN,
+            LEFT_HALL_V_PORT, LEFT_HALL_V_PIN,
+            LEFT_HALL_W_PORT, LEFT_HALL_W_PIN
+        );
+        
+        uint8_t right_hall_raw = read_hall_sensors(
+            RIGHT_HALL_U_PORT, RIGHT_HALL_U_PIN,
+            RIGHT_HALL_V_PORT, RIGHT_HALL_V_PIN,
+            RIGHT_HALL_W_PORT, RIGHT_HALL_W_PIN
+        );
+        
+        // 转换为高电平有效的表示（1=高电平，0=低电平）用于显示
+        uint8_t left_u = (left_hall_raw & 0x01) ? 0 : 1;
+        uint8_t left_v = (left_hall_raw & 0x02) ? 0 : 1;
+        uint8_t left_w = (left_hall_raw & 0x04) ? 0 : 1;
+        uint8_t left_high_active = (left_u << 0) | (left_v << 1) | (left_w << 2);
+        
+        uint8_t right_u = (right_hall_raw & 0x01) ? 0 : 1;
+        uint8_t right_v = (right_hall_raw & 0x02) ? 0 : 1;
+        uint8_t right_w = (right_hall_raw & 0x04) ? 0 : 1;
+        uint8_t right_high_active = (right_u << 0) | (right_v << 1) | (right_w << 2);
+        
         USART_SendString("\r\n=== HALL SENSOR STATES ===\r\n");
-        USART_SendString("Left Hall pins:\r\n");
-        print_hall_pin_state("LEFT_HALL_U", LEFT_HALL_U_PIN, left_u);
-        print_hall_pin_state("LEFT_HALL_V", LEFT_HALL_V_PIN, left_v);
-        print_hall_pin_state("LEFT_HALL_W", LEFT_HALL_W_PIN, left_w);
-        USART_Printf("Left Raw State: 0x%02X (%d)\r\n", left_raw, left_raw);
+        USART_SendString("Left Hall pins (低电平有效):\r\n");
+        USART_Printf("  LEFT_HALL_U (PB5): raw=0x%02X, high_active=%u\r\n", 
+                     (left_hall_raw & 0x01), left_u);
+        USART_Printf("  LEFT_HALL_V (PB6): raw=0x%02X, high_active=%u\r\n", 
+                     ((left_hall_raw >> 1) & 0x01), left_v);
+        USART_Printf("  LEFT_HALL_W (PB7): raw=0x%02X, high_active=%u\r\n", 
+                     ((left_hall_raw >> 2) & 0x01), left_w);
+        USART_Printf("Left Raw State (低电平有效): 0x%02X (%d)\r\n", left_hall_raw, left_hall_raw);
+        USART_Printf("Left High Active State: 0x%02X (%d)\r\n", left_high_active, left_high_active);
+        
+        // 霍尔状态解释
+        USART_SendString("Left Hall Interpretation:\r\n");
+        if (left_high_active == 0x00 || left_high_active == 0x07) {
+            USART_SendString("  WARNING: Hardware fault (000/111) - Hall disconnected, shorted, or wiring error\r\n");
+        } else if (left_high_active == 0x01 || left_high_active == 0x03 || left_high_active == 0x02 || 
+                   left_high_active == 0x06 || left_high_active == 0x04 || left_high_active == 0x05) {
+            USART_SendString("  NORMAL: Motor stationary, valid Hall state\r\n");
+            // 单个霍尔输出解释
+            if (left_high_active == 0x01) USART_SendString("    Hall U=1: Position aligned with N pole\r\n");
+            if (left_high_active == 0x02) USART_SendString("    Hall V=1: Position aligned with N pole\r\n");
+            if (left_high_active == 0x04) USART_SendString("    Hall W=1: Position aligned with N pole\r\n");
+            if (left_u == 0) USART_SendString("    Hall U=0: Position aligned with S pole\r\n");
+            if (left_v == 0) USART_SendString("    Hall V=0: Position aligned with S pole\r\n");
+            if (left_w == 0) USART_SendString("    Hall W=0: Position aligned with S pole\r\n");
+        }
+        
         USART_Printf("Left Motor Position: %d\r\n", left_motor.position);
-        USART_SendString("\r\nRight Hall pins:\r\n");
-        print_hall_pin_state("RIGHT_HALL_U", RIGHT_HALL_U_PIN, right_u);
-        print_hall_pin_state("RIGHT_HALL_V", RIGHT_HALL_V_PIN, right_v);
-        print_hall_pin_state("RIGHT_HALL_W", RIGHT_HALL_W_PIN, right_w);
-        USART_Printf("Right Raw State: 0x%02X (%d)\r\n", right_raw, right_raw);
+        
+        USART_SendString("\r\nRight Hall pins (低电平有效):\r\n");
+        USART_Printf("  RIGHT_HALL_U (PC10): raw=0x%02X, high_active=%u\r\n", 
+                     (right_hall_raw & 0x01), right_u);
+        USART_Printf("  RIGHT_HALL_V (PC11): raw=0x%02X, high_active=%u\r\n", 
+                     ((right_hall_raw >> 1) & 0x01), right_v);
+        USART_Printf("  RIGHT_HALL_W (PC12): raw=0x%02X, high_active=%u\r\n", 
+                     ((right_hall_raw >> 2) & 0x01), right_w);
+        USART_Printf("Right Raw State (低电平有效): 0x%02X (%d)\r\n", right_hall_raw, right_hall_raw);
+        USART_Printf("Right High Active State: 0x%02X (%d)\r\n", right_high_active, right_high_active);
+        
+        // 霍尔状态解释
+        USART_SendString("Right Hall Interpretation:\r\n");
+        if (right_high_active == 0x00 || right_high_active == 0x07) {
+            USART_SendString("  WARNING: Hardware fault (000/111) - Hall disconnected, shorted, or wiring error\r\n");
+        } else if (right_high_active == 0x01 || right_high_active == 0x03 || right_high_active == 0x02 || 
+                   right_high_active == 0x06 || right_high_active == 0x04 || right_high_active == 0x05) {
+            USART_SendString("  NORMAL: Motor stationary, valid Hall state\r\n");
+            // 单个霍尔输出解释
+            if (right_high_active == 0x01) USART_SendString("    Hall U=1: Position aligned with N pole\r\n");
+            if (right_high_active == 0x02) USART_SendString("    Hall V=1: Position aligned with N pole\r\n");
+            if (right_high_active == 0x04) USART_SendString("    Hall W=1: Position aligned with N pole\r\n");
+            if (right_u == 0) USART_SendString("    Hall U=0: Position aligned with S pole\r\n");
+            if (right_v == 0) USART_SendString("    Hall V=0: Position aligned with S pole\r\n");
+            if (right_w == 0) USART_SendString("    Hall W=0: Position aligned with S pole\r\n");
+        }
+        
         USART_Printf("Right Motor Position: %d\r\n", right_motor.position);
+        
+        // 显示全局变量状态用于比较
+        USART_SendString("\r\n=== GLOBAL VARIABLE STATES (from bldc.c) ===\r\n");
+        USART_Printf("left_motor.hall_state: 0x%02X\r\n", left_motor.hall_state);
+        USART_Printf("right_motor.hall_state: 0x%02X\r\n", right_motor.hall_state);
     }
     
     else if (strncmp(cmd_copy, "beep", 4) == 0) {

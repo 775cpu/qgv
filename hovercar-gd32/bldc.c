@@ -267,9 +267,9 @@ void Mixer(int16_t throttle, int16_t steering,
 /**
  * @brief 读取霍尔传感器状态
  */
-static uint8_t read_hall_sensors(uint32_t port_u, uint16_t pin_u,
-                                 uint32_t port_v, uint16_t pin_v,
-                                 uint32_t port_w, uint16_t pin_w) {
+uint8_t read_hall_sensors(uint32_t port_u, uint16_t pin_u,
+                          uint32_t port_v, uint16_t pin_v,
+                          uint32_t port_w, uint16_t pin_w) {
     uint8_t hall_u = GPIO_INPUT_BIT_GET(port_u, pin_u) ? 0 : 1;  // 低电平有效
     uint8_t hall_v = GPIO_INPUT_BIT_GET(port_v, pin_v) ? 0 : 1;
     uint8_t hall_w = GPIO_INPUT_BIT_GET(port_w, pin_w) ? 0 : 1;
